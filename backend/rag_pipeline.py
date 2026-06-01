@@ -5,13 +5,6 @@ from langchain_core.prompts import ChatPromptTemplate
 
 load_dotenv()
 
-# ----------------------------------------------------------------
-# These are loaded ONCE when the server starts, not on every request.
-# Loading ChromaDB and the LLM on every request would be very slow.
-# ----------------------------------------------------------------
-
-print("⏳ Loading ChromaDB and Gemini...")
-
 _embeddings = GoogleGenerativeAIEmbeddings(model="gemini-embedding-001")
 
 _vectorstore = Chroma(
@@ -19,17 +12,9 @@ _vectorstore = Chroma(
     embedding_function=_embeddings,
 )
 
-# k=5 means: return the 5 most relevant chunks from ChromaDB
 _retriever = _vectorstore.as_retriever(search_kwargs={"k": 5})
 
 _llm = ChatGoogleGenerativeAI(model="gemini-3.5-flash")
-
-print("✅ RAG pipeline ready")
-
-# ----------------------------------------------------------------
-# Prompt template — this is what gets sent to Gemini.
-# The {placeholders} get filled in at runtime.
-# ----------------------------------------------------------------
 
 _PROMPT = ChatPromptTemplate.from_template("""
 You are an expert Sri Lanka travel guide with deep knowledge of the island.
@@ -54,27 +39,16 @@ Keep travel times realistic — Sri Lanka roads are slow.
 Only recommend places mentioned in the knowledge above.
 """)
 
-
-# ----------------------------------------------------------------
-# Main function — called by the FastAPI endpoint
-# ----------------------------------------------------------------
-
 def generate_itinerary(days: int, interests: list, budget: str, start_city: str) -> str:
 
-    # Step 1: Build a search query from the user's preferences.
-    # This is what we search ChromaDB with.
     query = (
         f"{' '.join(interests)} attractions activities Sri Lanka "
         f"{budget} hotels transport from {start_city}"
     )
-
-    # Step 2: Search ChromaDB — returns the 5 most relevant text chunks
     relevant_docs = _retriever.invoke(query)
 
-    # Step 3: Join the chunks into one block of context text
     context = "\n\n".join(doc.page_content for doc in relevant_docs)
 
-    # Step 4: Fill in the prompt template with real values
     prompt_value = _PROMPT.invoke({
         "days": days,
         "interests": ", ".join(interests),
@@ -83,7 +57,6 @@ def generate_itinerary(days: int, interests: list, budget: str, start_city: str)
         "context": context,
     })
 
-    # Step 5: Send to Gemini and return the text response
     response = _llm.invoke(prompt_value)
     if isinstance(response.content, str):
         return response.content

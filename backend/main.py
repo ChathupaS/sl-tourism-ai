@@ -1,9 +1,13 @@
+import logging
+
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List
 
 from rag_pipeline import generate_itinerary
+
+logger = logging.getLogger("uvicorn.error")
 
 app = FastAPI(title="Sri Lanka Tourism AI")
 
@@ -35,4 +39,19 @@ def generate(preferences: TripPreferences):
         )
         return {"itinerary": itinerary}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        msg = str(e)
+        if "RESOURCE_EXHAUSTED" in msg or "429" in msg:
+            logger.warning("Gemini rate limit / quota hit: %s", msg)
+            raise HTTPException(
+                status_code=429,
+                detail=(
+                    "The AI model is rate-limited right now (Gemini free-tier "
+                    "quota reached). Wait a minute and try again, or check the "
+                    "API key's quota in Google AI Studio."
+                ),
+            )
+        logger.exception("Failed to generate itinerary")
+        raise HTTPException(
+            status_code=502,
+            detail="Could not generate the itinerary. Please try again.",
+        )
