@@ -59,13 +59,15 @@ Gemini writes the itinerary grounded in that knowledge.
 ```
 sl-tourism-ai/
 ├── backend/
-│   ├── main.py            # FastAPI app & routes
+│   ├── main.py            # FastAPI app, routes & request validation
 │   ├── rag_pipeline.py    # RAG: retrieve context + generate itinerary
 │   ├── load_data.py       # Build the vector store from data/*.txt
+│   ├── config.py          # Central settings (models, paths, CORS) from env
 │   ├── test_pipeline.py   # Quick CLI smoke test of the pipeline
 │   ├── data/              # Knowledge base (attractions, hotels, transport)
 │   ├── chroma_db/         # Generated vector store (git-ignored)
 │   ├── pyproject.toml     # Python dependencies
+│   ├── .env.example       # Copy to .env and fill in your API key
 │   └── .env               # GOOGLE_API_KEY (git-ignored)
 └── frontend/
     ├── src/
@@ -90,8 +92,8 @@ sl-tourism-ai/
 ```bash
 cd backend
 
-# Add your API key
-echo "GOOGLE_API_KEY=your_key_here" > .env
+# Add your API key (copy the template, then edit .env)
+cp .env.example .env        # then put your key in GOOGLE_API_KEY
 
 # Install dependencies
 uv sync
@@ -127,11 +129,22 @@ for `http://localhost:5173`, so keep those ports unless you update both sides.
 
 ## Environment variables
 
-The backend reads a single variable from `backend/.env`:
+The backend reads its settings from `backend/.env` (see
+[backend/.env.example](backend/.env.example)). Only `GOOGLE_API_KEY` is
+required; everything else has a sensible default and is centralized in
+[backend/config.py](backend/config.py).
 
-| Variable         | Description                          |
-| ---------------- | ------------------------------------ |
-| `GOOGLE_API_KEY` | Your Google Gemini API key (required) |
+| Variable         | Default              | Description                                            |
+| ---------------- | -------------------- | ----------------------------------------------------- |
+| `GOOGLE_API_KEY` | —                    | Your Google Gemini API key (**required**)             |
+| `EMBEDDING_MODEL`| `gemini-embedding-2` | Embedding model — used for both build and query       |
+| `LLM_MODEL`      | `gemini-2.5-flash`   | Chat model that writes the itinerary                  |
+| `RETRIEVER_K`    | `5`                  | Number of knowledge chunks retrieved per request      |
+| `CHUNK_SIZE`     | `500`                | Character chunk size when building the vector store   |
+| `CHUNK_OVERLAP`  | `50`                 | Character overlap between chunks                       |
+| `CHROMA_DIR`     | `./chroma_db`        | Where the vector store is persisted                   |
+| `DATA_DIR`       | `./data`             | Where the knowledge-base `.txt` files live            |
+| `CORS_ORIGINS`   | `http://localhost:5173` | Comma-separated allowed frontend origins           |
 
 `.env` is git-ignored — **never commit your API key.**
 
@@ -139,10 +152,10 @@ The backend reads a single variable from `backend/.env`:
 
 ### `GET /health`
 
-Health check.
+Health check. `vector_store_ready` is `false` until you've run `load_data.py`.
 
 ```json
-{ "status": "ok" }
+{ "status": "ok", "vector_store_ready": true }
 ```
 
 ### `POST /generate-itinerary`
@@ -162,10 +175,12 @@ Generate an itinerary from trip preferences.
 
 | Field        | Type       | Notes                                              |
 | ------------ | ---------- | -------------------------------------------------- |
-| `days`       | int        | Trip length (UI allows 1–14)                       |
-| `interests`  | string[]   | e.g. `beach`, `culture`, `wildlife`, `hiking`, `history`, `food` |
-| `budget`     | string     | `budget`, `mid-range` or `luxury`                  |
-| `start_city` | string     | e.g. `Colombo`, `Kandy`, `Galle`, `Negombo`        |
+| `days`       | int        | Trip length, **1–14** (validated)                  |
+| `interests`  | string[]   | At least one, e.g. `beach`, `culture`, `wildlife`, `hiking`, `history`, `food` |
+| `budget`     | string     | One of `budget`, `mid-range`, `luxury` (validated) |
+| `start_city` | string     | Non-empty, e.g. `Colombo`, `Kandy`, `Galle`, `Negombo` |
+
+Invalid input is rejected with `422` and a message describing the offending field.
 
 **Response**
 
@@ -175,8 +190,10 @@ Generate an itinerary from trip preferences.
 
 **Errors**
 
+- `422` — Invalid request body (e.g. `days` out of range, unknown `budget`, no interests).
 - `429` — Gemini free-tier quota/rate limit reached; wait and retry.
 - `502` — Itinerary generation failed; retry.
+- `503` — Vector store not built yet; run `load_data.py` first.
 
 ## Customizing the knowledge base
 
@@ -200,6 +217,7 @@ uv run python load_data.py
   transport details before you travel.
 - The vector store (`backend/chroma_db/`) and `.env` are git-ignored. A fresh
   clone must run `load_data.py` before the API can return results.
-- The embedding model in [load_data.py](backend/load_data.py) must match the one
-  in [rag_pipeline.py](backend/rag_pipeline.py), or retrieval will fail — keep them
-  in sync if you change models.
+- Build-time and query-time embeddings must use the **same** model or retrieval
+  fails. Both now read `EMBEDDING_MODEL` from
+  [config.py](backend/config.py), so change it in one place — and rebuild the
+  vector store (`load_data.py`) afterwards.
